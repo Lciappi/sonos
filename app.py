@@ -363,6 +363,82 @@ def api_group_everywhere(uuid):
     return jsonify({"ok": not errors, "joined": [t.room_name for t in targets], "errors": errors})
 
 
+# ----- cross-household mirror (best-effort, not synchronized) -----
+
+@app.post("/api/<uuid>/mirror_other_households")
+def api_mirror_other_households(uuid):
+    """Copy this group's current AVT URI to coordinators in every OTHER household.
+
+    Sonos won't sync across households (different clock domains), so expect
+    drift. Best for long radio streams where 0.5–2s offset doesn't matter.
+    """
+    src, err = _speaker_or_404(uuid)
+    if err: return err
+    try:
+        media = src.get_media_info()
+    except SoapError as e:
+        return jsonify({"error": f"could not read source: {e}"}), 502
+
+    if not media["uri"]:
+        return jsonify({"error": "source has no current URI to mirror"}), 400
+    if media["uri"].startswith("x-rincon-queue:"):
+        return jsonify({
+            "error": "source is playing from its queue — pick a radio station "
+                     "or favorite first, those mirror cleanly across households"
+        }), 400
+
+    speakers = cache.all()
+    grouped = _household_groups(speakers)
+    targets = []
+    seen_households = {src.household}
+    for g in grouped:
+        if g.get("household") in seen_households:
+            continue
+        seen_households.add(g.get("household"))
+        coord = next((s for s in speakers if s.uuid == g["coordinator"]), None)
+        if coord:
+            targets.append(coord)
+
+    mirrored = []
+    errors = []
+    is_service_stream = "sid=" in media["uri"]
+    for t in targets:
+        try:
+            t.set_av_transport_uri(media["uri"], media["metadata"])
+            t.play()
+            mirrored.append(t.room_name)
+        except SoapError as e:
+            msg = str(e)
+            if is_service_stream and "500" in msg:
+                msg = (f"{t.room_name} can't play this — it's a Sonos Music service "
+                       f"stream that requires the same service to be configured "
+                       f"there. Try a Sonos Radio station (free, no auth).")
+            else:
+                msg = f"{t.room_name}: {e}"
+            errors.append(msg)
+    return jsonify({"ok": not errors, "mirrored": mirrored, "errors": errors})
+
+
+@app.post("/api/stop_all")
+def api_stop_all():
+    """Stop every group coordinator on the network. Idempotent — fine to call
+    when speakers are already stopped."""
+    speakers = cache.all()
+    grouped = _household_groups(speakers)
+    seen_coords = {g["coordinator"] for g in grouped}
+    stopped, errors = [], []
+    for sp in speakers:
+        if sp.uuid not in seen_coords:
+            continue
+        try:
+            sp.stop()
+            stopped.append(sp.room_name)
+        except SoapError:
+            # If already stopped Sonos returns an error; treat as success.
+            stopped.append(sp.room_name)
+    return jsonify({"ok": not errors, "stopped": stopped, "errors": errors})
+
+
 # ----- queue -----
 
 @app.get("/api/<uuid>/queue")

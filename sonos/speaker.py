@@ -249,6 +249,27 @@ class Speaker:
         xml = call(self.ip, *_AVT, "GetTransportInfo", {"InstanceID": 0})
         return extract(xml, "CurrentTransportState") or "UNKNOWN"
 
+    def get_media_info(self) -> dict:
+        """Return what's loaded into the AV transport (URI + metadata).
+
+        Distinct from now_playing()/GetPositionInfo: this returns the
+        *container* URI (e.g. queue, radio stream, favorite) rather than the
+        currently-playing track URI within it.
+        """
+        xml = call(self.ip, *_AVT, "GetMediaInfo", {"InstanceID": 0})
+        return {
+            "uri": extract(xml, "CurrentURI") or "",
+            "metadata": extract(xml, "CurrentURIMetaData") or "",
+        }
+
+    def set_av_transport_uri(self, uri: str, metadata: str = "") -> None:
+        call(
+            self.ip,
+            *_AVT,
+            "SetAVTransportURI",
+            {"InstanceID": 0, "CurrentURI": uri, "CurrentURIMetaData": metadata},
+        )
+
     def now_playing(self) -> dict:
         info_xml = call(self.ip, *_AVT, "GetPositionInfo", {"InstanceID": 0})
         meta = extract(info_xml, "TrackMetaData") or ""

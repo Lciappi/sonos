@@ -198,7 +198,6 @@ function renderSpeakers(g) {
 
 function renderGroupTab(g) {
   if (!lastState) return "";
-  const sameHousehold = lastState.groups.filter(o => o.household === g.household && o.coordinator !== g.coordinator);
   const sameHouseholdSpeakers = [];
   for (const og of lastState.groups) {
     if (og.household === g.household) {
@@ -208,6 +207,8 @@ function renderGroupTab(g) {
   const ours = new Set(g.members.map(m => m.uuid));
   const others = sameHouseholdSpeakers.filter(s => !ours.has(s.uuid) && !s.is_satellite);
   const isMulti = g.members.length > 1;
+  const otherHouseholds = (lastState.households || []).filter(h => h && h !== g.household);
+  const hasOtherHouseholds = otherHouseholds.length > 0;
 
   return `
     <div class="group-controls">
@@ -234,6 +235,19 @@ function renderGroupTab(g) {
             <button data-leave-uuid="${escapeAttr(m.uuid)}">Leave</button>
           </div>
         `).join("")}
+      </div>
+    ` : ""}
+    ${hasOtherHouseholds ? `
+      <div class="cross-household">
+        <div class="label">Cross-household (best-effort)</div>
+        <div class="group-controls">
+          <button data-mirror="${escapeAttr(g.coordinator)}">Mirror to other households</button>
+          <button data-stop-all>Stop everything</button>
+        </div>
+        <div class="hint">
+          Sonos can't sync across households, so expect ~0.5–2s drift. Works
+          best for radio/favorites; queue playback can't be mirrored.
+        </div>
       </div>
     ` : ""}
   `;
@@ -469,6 +483,32 @@ function wireGroup(el, g) {
       finally { btn.disabled = false; }
     });
   }
+
+  el.querySelector(`[data-mirror="${cssEscape(g.coordinator)}"]`)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    $status.textContent = "Mirroring across households…";
+    try {
+      const out = await post(`/api/${g.coordinator}/mirror_other_households`);
+      if (out.errors?.length) {
+        setError(new Error(out.errors.join("; ")));
+      } else {
+        $status.textContent = `Mirrored to ${(out.mirrored || []).join(", ") || "(no targets)"}`;
+      }
+      setTimeout(fetchState, 500);
+    } catch (err) { setError(err); }
+    finally { btn.disabled = false; }
+  });
+
+  el.querySelector(`[data-stop-all]`)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await post("/api/stop_all");
+      setTimeout(fetchState, 250);
+    } catch (err) { setError(err); }
+    finally { btn.disabled = false; }
+  });
 }
 
 function wireAudio(panel, g) {
