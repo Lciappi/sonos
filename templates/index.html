@@ -11,11 +11,22 @@
     <h1>Sonos</h1>
     <div class="header-actions">
       <span id="status" class="status">Loading…</span>
+      <button id="alarms-btn" type="button">Alarms</button>
       <button id="refresh" type="button" title="Re-discover speakers">Re-scan</button>
     </div>
   </header>
 
   <main id="groups" class="groups"></main>
+
+  <aside id="drawer" class="drawer hidden">
+    <div class="drawer-head">
+      <h2 id="drawer-title">Alarms</h2>
+      <button id="drawer-close" type="button">×</button>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+
+  <div id="overlay" class="overlay hidden"></div>
 
   <script src="/static/app.js"></script>
 </body>

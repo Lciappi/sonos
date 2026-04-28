@@ -104,6 +104,145 @@ class Speaker:
             {"InstanceID": 0, "Channel": "Master", "DesiredMute": 1 if mute else 0},
         )
 
+    # ----- EQ (bass / treble / loudness / balance) -----
+
+    def get_bass(self) -> int:
+        xml = call(self.ip, *_RC, "GetBass", {"InstanceID": 0})
+        v = extract(xml, "CurrentBass")
+        return int(v) if v is not None else 0
+
+    def set_bass(self, value: int) -> None:
+        value = max(-10, min(10, int(value)))
+        call(self.ip, *_RC, "SetBass", {"InstanceID": 0, "DesiredBass": value})
+
+    def get_treble(self) -> int:
+        xml = call(self.ip, *_RC, "GetTreble", {"InstanceID": 0})
+        v = extract(xml, "CurrentTreble")
+        return int(v) if v is not None else 0
+
+    def set_treble(self, value: int) -> None:
+        value = max(-10, min(10, int(value)))
+        call(self.ip, *_RC, "SetTreble", {"InstanceID": 0, "DesiredTreble": value})
+
+    def get_loudness(self) -> bool:
+        xml = call(self.ip, *_RC, "GetLoudness", {"InstanceID": 0, "Channel": "Master"})
+        return extract(xml, "CurrentLoudness") == "1"
+
+    def set_loudness(self, on: bool) -> None:
+        call(
+            self.ip,
+            *_RC,
+            "SetLoudness",
+            {"InstanceID": 0, "Channel": "Master", "DesiredLoudness": 1 if on else 0},
+        )
+
+    def get_balance(self) -> int:
+        """Return -100 (full left) … 0 (centered) … +100 (full right)."""
+        lf = call(self.ip, *_RC, "GetVolume", {"InstanceID": 0, "Channel": "LF"})
+        rf = call(self.ip, *_RC, "GetVolume", {"InstanceID": 0, "Channel": "RF"})
+        try:
+            lv = int(extract(lf, "CurrentVolume") or "100")
+            rv = int(extract(rf, "CurrentVolume") or "100")
+        except ValueError:
+            return 0
+        return rv - lv  # -100..+100
+
+    def set_balance(self, value: int) -> None:
+        value = max(-100, min(100, int(value)))
+        lf = 100 - max(0, value)
+        rf = 100 + min(0, value)
+        call(self.ip, *_RC, "SetVolume", {"InstanceID": 0, "Channel": "LF", "DesiredVolume": lf})
+        call(self.ip, *_RC, "SetVolume", {"InstanceID": 0, "Channel": "RF", "DesiredVolume": rf})
+
+    # ----- play mode (shuffle / repeat) and crossfade -----
+
+    PLAY_MODES = (
+        "NORMAL",
+        "REPEAT_ALL",
+        "REPEAT_ONE",
+        "SHUFFLE_NOREPEAT",
+        "SHUFFLE",
+        "SHUFFLE_REPEAT_ONE",
+    )
+
+    def get_play_mode(self) -> str:
+        xml = call(self.ip, *_AVT, "GetTransportSettings", {"InstanceID": 0})
+        return extract(xml, "PlayMode") or "NORMAL"
+
+    def set_play_mode(self, mode: str) -> None:
+        mode = mode.upper()
+        if mode not in self.PLAY_MODES:
+            raise ValueError(f"unknown play mode {mode!r}")
+        call(self.ip, *_AVT, "SetPlayMode", {"InstanceID": 0, "NewPlayMode": mode})
+
+    def get_crossfade(self) -> bool:
+        xml = call(self.ip, *_AVT, "GetCrossfadeMode", {"InstanceID": 0})
+        return extract(xml, "CrossfadeMode") == "1"
+
+    def set_crossfade(self, on: bool) -> None:
+        call(
+            self.ip,
+            *_AVT,
+            "SetCrossfadeMode",
+            {"InstanceID": 0, "CrossfadeMode": 1 if on else 0},
+        )
+
+    # ----- seek -----
+
+    def seek_time(self, hms: str) -> None:
+        """Seek to position in current track. Format: 'H:MM:SS' or 'MM:SS'."""
+        if hms.count(":") == 1:
+            hms = "0:" + hms
+        call(self.ip, *_AVT, "Seek", {"InstanceID": 0, "Unit": "REL_TIME", "Target": hms})
+
+    def seek_track(self, track_number: int) -> None:
+        call(
+            self.ip,
+            *_AVT,
+            "Seek",
+            {"InstanceID": 0, "Unit": "TRACK_NR", "Target": int(track_number)},
+        )
+
+    # ----- sleep timer -----
+
+    def get_sleep_timer(self) -> int:
+        """Remaining sleep timer in seconds. 0 if disabled."""
+        xml = call(self.ip, *_AVT, "GetRemainingSleepTimerDuration", {"InstanceID": 0})
+        hms = extract(xml, "RemainingSleepTimerDuration") or ""
+        return _hms_to_seconds(hms)
+
+    def set_sleep_timer(self, seconds: int) -> None:
+        """Set sleep timer. Pass 0 to cancel."""
+        if seconds <= 0:
+            duration = ""
+        else:
+            duration = _seconds_to_hms(seconds)
+        call(
+            self.ip,
+            *_AVT,
+            "ConfigureSleepTimer",
+            {"InstanceID": 0, "NewSleepTimerDuration": duration},
+        )
+
+    # ----- grouping -----
+
+    def join(self, coordinator_uuid: str) -> None:
+        """Join the group whose coordinator has the given UUID."""
+        call(
+            self.ip,
+            *_AVT,
+            "SetAVTransportURI",
+            {
+                "InstanceID": 0,
+                "CurrentURI": f"x-rincon:{coordinator_uuid}",
+                "CurrentURIMetaData": "",
+            },
+        )
+
+    def unjoin(self) -> None:
+        """Leave the current group, becoming a standalone coordinator."""
+        call(self.ip, *_AVT, "BecomeCoordinatorOfStandaloneGroup", {"InstanceID": 0})
+
     # ----- now playing -----
 
     def transport_state(self) -> str:
@@ -161,6 +300,29 @@ def _didl(meta_xml: str, tag: str) -> str | None:
         return None
     val = _xml_unescape(m.group(1).strip())
     return val or None
+
+
+def _hms_to_seconds(hms: str) -> int:
+    if not hms or hms == "NOT_IMPLEMENTED":
+        return 0
+    parts = hms.split(":")
+    try:
+        if len(parts) == 3:
+            h, m, s = (int(p) for p in parts)
+            return h * 3600 + m * 60 + s
+        if len(parts) == 2:
+            m, s = (int(p) for p in parts)
+            return m * 60 + s
+    except ValueError:
+        return 0
+    return 0
+
+
+def _seconds_to_hms(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}"
 
 
 def _xml_unescape(s: str) -> str:
