@@ -201,11 +201,3 @@ input[type="range"] {
   font-variant-numeric: tabular-nums;
 }
 
-footer {
-  padding: 0 32px 24px;
-  color: var(--muted);
-  font-size: 12px;
-  max-width: 720px;
-}
-
-footer p { margin: 0; }
